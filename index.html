@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>个人收藏夹整理</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/vue/3.3.4/vue.global.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/typed.js/2.0.12/typed.min.js"></script>
+    <script src="https://unpkg.com/splitting@1.0.6/dist/splitting.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.4.3/echarts.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.3.2/pixi.min.js"></script>
+    <link href="https://unpkg.com/splitting@1.0.6/dist/splitting.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <canvas id="particles-canvas"></canvas>
+    
+    <div id="app">
+        <!-- 顶部导航栏 -->
+        <nav class="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-40">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex justify-between items-center h-16">
+                    <div class="flex items-center">
+                        <!-- 手机端 -->
+                        <button @click="toggleSidebar" class="md:hidden p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100">
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+                            </svg>
+                        </button>
+                        <h1 class="ml-2 text-xl font-bold text-gray-900">📚 我的收藏夹</h1>
+                    </div>
+                    
+                    <div class="flex items-center space-x-4">
+                        <div class="relative">
+                            <input 
+                                v-model="searchQuery" 
+                                type="text" 
+                                placeholder="搜索书签..." 
+                                class="w-64 pl-10 pr-4 py-2 border border-gray-300 rounded-lg search-glow focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            >
+                            <svg class="absolute left-3 top-2.5 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                            </svg>
+                        </div>
+                        
+                        <button @click="showAddBookmark = true" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors">
+                            添加书签
+                        </button>
+                        
+                        <button @click="showImportExport = true" class="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors">
+                            导入/导出
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <div class="flex">
+            <!-- 左侧边栏 -->
+            <transition name="slide">
+                <aside v-show="sidebarOpen" class="fixed md:relative inset-y-0 left-0 z-30 w-64 bg-white shadow-lg md:shadow-none border-r border-gray-200">
+                    <div class="p-4">
+                        <div class="flex items-center justify-between mb-4">
+                            <h2 class="text-lg font-semibold text-gray-900">分类</h2>
+                            <button @click="addCategory" class="text-blue-600 hover:text-blue-800">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        
+                        <div v-if="selectedCategory" class="category-stats">
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-700">{{ selectedCategoryName }}</span>
+                            <div class="text-gray-600">
+                                <span>直接书签: {{ directBookmarkCount }}</span>
+                                <span class="mx-2">|</span>
+                                <span>总计: {{ totalBookmarkCount }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="category-tree">
+                            <div v-for="category in categoryTree" :key="category.id" class="mb-2">
+                                <div 
+                                    class="tree-item flex items-center p-2 rounded cursor-pointer relative"
+                                    :class="{ 'bg-blue-100 text-blue-700': selectedCategory === category.id, 'ring-2 ring-blue-300': hoveredCategoryId === category.id }"
+                                    @click="selectCategory(category.id)"
+                                    @dragover.prevent="handleCategoryDragOver($event, category.id)"
+                                    @dragenter.prevent="handleCategoryDragEnter($event, category.id)"
+                                    @dragleave.prevent="handleCategoryDragLeave($event, category.id)"
+                                    @drop="handleCategoryDropOrReorder(category.id, $event)"
+                                    draggable="true"
+                                    @dragstart="handleCategoryDragStart($event, category)"
+                                    @dragend="handleCategoryDragEnd($event)"
+                                    @contextmenu.prevent="confirmDeleteCategory(category)"
+                                >
+                                    <button 
+                                        v-if="category.children && category.children.length"
+                                        @click.stop="toggleCategory(category.id)"
+                                        class="mr-2 text-gray-500 hover:text-gray-700"
+                                    >
+                                        <svg class="w-4 h-4 transition-transform" :class="{ 'rotate-90': category.expanded }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                                        </svg>
+                                    </button>
+                                    <span v-else class="w-6"></span>
+                                    <svg class="w-4 h-4 mr-2 category-icon" fill="currentColor" viewBox="0 0 20 20">
+                                        <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"></path>
+                                    </svg>
+                                    <span class="flex-1 text-sm">{{ category.name }}</span>
+                                    <span class="text-xs text-gray-500">{{ category.count }}</span>
+                                    <span v-if="hoveredCategoryId === category.id" class="ml-2 text-xs text-gray-600">
+                                        {{ hoveredDropMode === 'child' ? '放在此为子分类' : (hoveredDropMode === 'before' ? '插入为同级前' : '插入为同级后') }}
+                                    </span>
+                                </div>
+                                
+                                <transition name="fade">
+                                    <div v-if="category.expanded && category.children" class="ml-6 mt-1">
+                                        <div 
+                                            v-for="child in category.children" 
+                                            :key="child.id"
+                                            class="tree-item flex items-center p-2 rounded cursor-pointer relative"
+                                            :class="{ 'bg-blue-50 text-blue-600': selectedCategory === child.id, 'ring-2 ring-blue-300': hoveredCategoryId === child.id }"
+                                            @click="selectCategory(child.id)"
+                                            @dragover.prevent="handleCategoryDragOver($event, child.id)"
+                                            @dragenter.prevent="handleCategoryDragEnter($event, child.id)"
+                                            @dragleave.prevent="handleCategoryDragLeave($event, child.id)"
+                                            @drop="handleCategoryDropOrReorder(child.id, $event)"
+                                            draggable="true"
+                                            @dragstart="handleCategoryDragStart($event, child)"
+                                            @dragend="handleCategoryDragEnd($event)"
+                                            @contextmenu.prevent="confirmDeleteCategory(child)"
+                                        >
+                                            <svg class="w-4 h-4 mr-2 category-icon level-1" fill="currentColor" viewBox="0 0 20 20">
+                                                <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"></path>
+                                            </svg>
+                                            <span class="flex-1 text-sm">{{ child.name }}</span>
+                                            <span class="text-xs text-gray-500">{{ child.count }}</span>
+                                            <span v-if="hoveredCategoryId === child.id" class="ml-2 text-xs text-gray-600">
+                                                {{ hoveredDropMode === 'child' ? '放在此为子分类' : (hoveredDropMode === 'before' ? '插入为同级前' : '插入为同级后') }}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </transition>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-6">
+                            <h3 class="text-sm font-semibold text-gray-700 mb-3">热门标签</h3>
+                            <div class="tag-cloud">
+                                <span 
+                                    v-for="tag in popularTags" 
+                                    :key="tag.name"
+                                    :style="{ backgroundColor: tag.color, color: 'white' }"
+                                    @click="filterByTag(tag.name)"
+                                    class="hover:opacity-80"
+                                >
+                                    {{ tag.name }} ({{ tag.count }})
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </aside>
+            </transition>
+            
+            <!-- 主内容区 -->
+            <main class="flex-1 p-6">
+                <div class="max-w-7xl mx-auto">
+                    <!-- 工具栏 -->
+                    <div class="flex justify-between items-center mb-6">
+                        <div class="flex items-center space-x-4">
+                            <span class="text-gray-600">共 {{ filteredBookmarks.length }} 个书签</span>
+                            <div class="flex space-x-2">
+                                <button 
+                                    @click="viewMode = 'grid'" 
+                                    :class="{ 'bg-blue-600 text-white': viewMode === 'grid', 'bg-gray-200 text-gray-700': viewMode !== 'grid' }"
+                                    class="px-3 py-1 rounded-md text-sm transition-colors"
+                                >
+                                    网格
+                                </button>
+                                <button 
+                                    @click="viewMode = 'list'" 
+                                    :class="{ 'bg-blue-600 text-white': viewMode === 'list', 'bg-gray-200 text-gray-700': viewMode !== 'list' }"
+                                    class="px-3 py-1 rounded-md text-sm transition-colors"
+                                >
+                                    列表
+                                </button>
+                                <!-- 批量模式开关 -->
+                                <button
+                                    @click="toggleBulkMode"
+                                    :class="{ 'bg-yellow-500 text-white': bulkMode, 'bg-gray-200 text-gray-700': !bulkMode }"
+                                    class="px-3 py-1 rounded-md text-sm transition-colors"
+                                >
+                                    批量
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-center space-x-2">
+                            <select v-model="sortBy" class="border border-gray-300 rounded-md px-3 py-1 text-sm">
+                                <option value="createdAt">按时间排序</option>
+                                <option value="title">按标题排序</option>
+                                <option value="visitCount">按访问次数</option>
+                            </select>
+                        </div>
+                    </div>
+                    <!-- 批量操作栏（在批量模式下始终显示） -->
+                    <div v-if="bulkMode" class="mb-4 flex items-center justify-between bg-white p-3 rounded border border-gray-200">
+                        <div class="flex items-center space-x-3">
+                            <span class="text-gray-700">已选择 {{ selectedCount }} 个</span>
+                            <button @click="selectAllOnPage" class="px-3 py-1 bg-gray-100 rounded text-sm">{{ isAllSelectedOnPage ? '清除选择' : '本页全选' }}</button>
+                        </div>
+                        <div class="flex items-center space-x-3">
+                            <button @click="deleteSelected" class="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700" :disabled="selectedCount===0">批量删除</button>
+                            <div class="flex items-center space-x-2">
+                                <select v-model="bulkMoveTarget" class="border border-gray-300 rounded-md px-3 py-1 text-sm">
+                                    <option value="">移动到分类...</option>
+                                    <option v-for="category in flatCategories" :key="category.id" :value="category.id">{{ category.name }}</option>
+                                </select>
+                                <button @click="moveSelectedToCategory(bulkMoveTarget)" class="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700" :disabled="!bulkMoveTarget || selectedCount===0">移动</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 书签网格 -->
+                    <transition name="fade" mode="out-in">
+                        <div v-if="viewMode === 'grid'" class="bookmark-grid">
+                            <div 
+                                v-for="bookmark in paginatedBookmarks" 
+                                :key="bookmark.id"
+                                class="card-hover bg-white rounded-lg shadow-sm border border-gray-200 p-4 cursor-pointer relative"
+                                @click="handleItemClick(bookmark, $event)"
+                                draggable="true"
+                                @dragstart="handleDragStart($event, bookmark)"
+                                @dragend="handleDragEnd($event)"
+                                @dragover.prevent
+                                @drop="handleDrop($event, bookmark)"
+                            >
+                                <!-- 复选框（阻止冒泡以免触发打开书签） -->
+                                <div class="absolute left-3 top-3" v-if="bulkMode">
+                                    <input type="checkbox" :checked="selectedIds.includes(bookmark.id)" @change.stop="toggleSelect(bookmark, $event)" @click.stop />
+                                </div>
+                                <div class="flex items-start justify-between mb-3">
+                                    <img :src="bookmark.favicon || 'data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2216%22%20height%3D%2216%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22currentColor%22%20stroke-width%3D%222%22%3E%3Ccircle%20cx%3D%2212%22%20cy%3D%2212%22%20r%3D%2210%22/%3E%3Cpath%20d%3D%22M12%202a15.3%2015.3%200%200%201%204%2010%2015.3%2015.3%200%200%201-4%2010%2015.3%2015.3%200%200%201-4-10%2015.3%2015.3%200%200%201%204-10z%22/%3E%3C/svg%3E'"
+     class="w-6 h-6 rounded"
+     @error="$event.target.src='data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2216%22%20height%3D%2216%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22currentColor%22%20stroke-width%3D%222%22%3E%3Ccircle%20cx%3D%2212%22%20cy%3D%2212%22%20r%3D%2210%22/%3E%3Cpath%20d%3D%22M12%202a15.3%2015.3%200%200%201%204%2010%2015.3%2015.3%200%200%201-4%2010%2015.3%2015.3%200%200%201-4-10%2015.3%2015.3%200%200%201%204-10z%22/%3E%3C/svg%3E'"
+     alt="">
+                                    <div class="flex space-x-1">
+                                        <button 
+                                            @click.stop="editBookmark(bookmark)"
+                                            class="p-1 text-gray-400 hover:text-blue-600 rounded"
+                                        >
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                                            </svg>
+                                        </button>
+                                        <button 
+                                            @click.stop="deleteBookmark(bookmark)"
+                                            class="p-1 text-gray-400 hover:text-red-600 rounded"
+                                        >
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <h3 class="font-semibold text-gray-900 mb-2 text-sm line-clamp-2">{{ bookmark.title }}</h3>
+                                <p class="text-gray-600 text-xs mb-3 line-clamp-2">{{ bookmark.description }}</p>
+                                
+                                <div class="flex flex-wrap gap-1 mb-2">
+                                    <span 
+                                        v-for="tag in bookmark.tags" 
+                                        :key="tag"
+                                        class="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full"
+                                    >
+                                        {{ tag }}
+                                    </span>
+                                </div>
+                                
+                                <div class="flex justify-between items-center text-xs text-gray-500">
+                                    <span>{{ formatDate(bookmark.createdAt) }}</span>
+                                    <span>访问 {{ bookmark.visitCount }} 次</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div v-else class="space-y-2">
+                            <div 
+                                v-for="bookmark in paginatedBookmarks" 
+                                :key="bookmark.id"
+                                class="bg-white rounded-lg shadow-sm border border-gray-200 p-4 cursor-pointer hover:bg-gray-50 transition-colors"
+                                @click="openBookmark(bookmark.url)"
+                                draggable="true"
+                                @dragstart="handleDragStart($event, bookmark)"
+                                @dragend="handleDragEnd($event)"
+                            >
+                                <div class="flex items-center justify-between">
+                                    <div class="flex items-center space-x-4 flex-1">
+                                        <!-- 列表项复选框 -->
+                                        <input v-if="bulkMode" type="checkbox" :checked="selectedIds.includes(bookmark.id)" @change.stop="toggleSelect(bookmark, $event)" @click.stop />
+                                        <img :src="bookmark.favicon || 'data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2216%22%20height%3D%2216%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22currentColor%22%20stroke-width%3D%222%22%3E%3Ccircle%20cx%3D%2212%22%20cy%3D%2212%22%20r%3D%2210%22/%3E%3Cpath%20d%3D%22M12%202a15.3%2015.3%200%200%201%204%2010%2015.3%2015.3%200%200%201-4%2010%2015.3%2015.3%200%200%201-4-10%2015.3%2015.3%200%200%201%204-10z%22/%3E%3C/svg%3E'"
+     class="w-8 h-8 rounded"
+     @error="$event.target.src='data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2216%22%20height%3D%2216%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22currentColor%22%20stroke-width%3D%222%22%3E%3Ccircle%20cx%3D%2212%22%20cy%3D%2212%22%20r%3D%2210%22/%3E%3Cpath%20d%3D%22M12%202a15.3%2015.3%200%200%201%204%2010%2015.3%2015.3%200%200%201-4%2010%2015.3%2015.3%200%200%201-4-10%2015.3%2015.3%200%200%201%204-10z%22/%3E%3C/svg%3E'"
+     alt="">
+                                        <div class="flex-1">
+                                            <h3 class="font-semibold text-gray-900">{{ bookmark.title }}</h3>
+                                            <p class="text-gray-600 text-sm">{{ bookmark.description }}</p>
+                                            <div class="flex items-center space-x-4 mt-1">
+                                                <span class="text-xs text-gray-500">{{ formatDate(bookmark.createdAt) }}</span>
+                                                <span class="text-xs text-gray-500">访问 {{ bookmark.visitCount }} 次</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="flex items-center space-x-2">
+                                        <div class="flex flex-wrap gap-1">
+                                            <span 
+                                                v-for="tag in bookmark.tags" 
+                                                :key="tag"
+                                                class="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full"
+                                            >
+                                                {{ tag }}
+                                            </span>
+                                        </div>
+                                        <button 
+                                            @click.stop="editBookmark(bookmark)"
+                                            class="p-2 text-gray-400 hover:text-blue-600 rounded"
+                                        >
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                                            </svg>
+                                        </button>
+                                        <button 
+                                            @click.stop="deleteBookmark(bookmark)"
+                                            class="p-2 text-gray-400 hover:text-red-600 rounded"
+                                        >
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </transition>
+                    
+                    <!-- 分页 -->
+                    <div v-if="totalPages > 1" class="flex justify-center mt-8">
+                        <div class="flex space-x-2">
+                            <button 
+                                @click="currentPage--" 
+                                :disabled="currentPage === 1"
+                                class="px-3 py-2 border border-gray-300 rounded-md text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+                            >
+                                上一页
+                            </button>
+                            <span class="px-3 py-2 text-sm text-gray-700">
+                                {{ currentPage }} / {{ totalPages }}
+                            </span>
+                            <button 
+                                @click="currentPage++" 
+                                :disabled="currentPage === totalPages"
+                                class="px-3 py-2 border border-gray-300 rounded-md text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+                            >
+                                下一页
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+        
+        <!-- 添加/编辑书签模态框 -->
+        <transition name="fade">
+            <div v-if="showAddBookmark || editingBookmark" class="fixed inset-0 modal-overlay flex items-center justify-center z-50">
+                <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4">
+                    <div class="p-6">
+                        <h3 class="text-lg font-semibold text-gray-900 mb-4">
+                            {{ editingBookmark ? '编辑书签' : '添加新书签' }}
+                        </h3>
+                        
+                        <form @submit.prevent="saveBookmark">
+                            <div class="space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">标题</label>
+                                    <input 
+                                        v-model="bookmarkForm.title" 
+                                        type="text" 
+                                        required
+                                        class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    >
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">网址</label>
+                                    <input 
+                                        v-model="bookmarkForm.url" 
+                                        type="url" 
+                                        required
+                                        class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    >
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">描述</label>
+                                    <textarea 
+                                        v-model="bookmarkForm.description" 
+                                        rows="3"
+                                        class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    ></textarea>
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">分类</label>
+                                    <select 
+                                        v-model="bookmarkForm.category" 
+                                        class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    >
+                                        <option value="">选择分类</option>
+                                        <option v-for="category in flatCategories" :key="category.id" :value="category.id">
+                                            {{ category.name }}
+                                        </option>
+                                    </select>
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">标签</label>
+                                    <input 
+                                        v-model="bookmarkForm.tags" 
+                                        type="text" 
+                                        placeholder="用逗号分隔多个标签"
+                                        class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    >
+                                </div>
+                            </div>
+                            
+                            <div class="flex justify-end space-x-3 mt-6">
+                                <button 
+                                    type="button" 
+                                    @click="cancelEdit"
+                                    class="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                                >
+                                    取消
+                                </button>
+                                <button 
+                                    type="submit"
+                                    class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                                >
+                                    {{ editingBookmark ? '保存' : '添加' }}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </transition>
+        
+        <!-- 导入/导出模态框 -->
+        <transition name="fade">
+            <div v-if="showImportExport" class="fixed inset-0 modal-overlay flex items-center justify-center z-50">
+                <div class="bg-white rounded-lg shadow-xl w-full max-w-md mx-4">
+                    <div class="p-6">
+                        <h3 class="text-lg font-semibold text-gray-900 mb-4">导入/导出</h3>
+                        
+                        <div class="space-y-4">
+                            <div>
+                                <h4 class="text-sm font-medium text-gray-700 mb-2">导入书签</h4>
+                                <input 
+                                    type="file" 
+                                    accept=".html,.json"
+                                    @change="importBookmarks"
+                                    class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                >
+                                <p class="text-xs text-gray-500 mt-1">支持Chrome导出的HTML格式和JSON格式</p>
+                            </div>
+                            
+                            <div>
+                                <h4 class="text-sm font-medium text-gray-700 mb-2">导出书签</h4>
+                                <div class="flex space-x-2">
+                                    <button 
+                                        @click="exportBookmarks('html')"
+                                        class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 text-sm"
+                                    >
+                                        导出HTML
+                                    </button>
+                                    <button 
+                                        @click="exportBookmarks('json')"
+                                        class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
+                                    >
+                                        导出JSON
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div>
+                                <h4 class="text-sm font-medium text-gray-700 mb-2">数据管理</h4>
+                                <div class="flex space-x-2">
+                                    <button 
+                                        @click="backupData"
+                                        class="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 text-sm"
+                                    >
+                                        备份数据
+                                    </button>
+                                    <button 
+                                        @click="clearAllData"
+                                        class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 text-sm"
+                                    >
+                                        清空数据
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="flex justify-end mt-6">
+                            <button 
+                                @click="showImportExport = false"
+                                class="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                            >
+                                关闭
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </transition>
+        <!-- 撤销提示吐司 -->
+        <div v-if="undoToast" class="fixed left-6 bottom-6 z-50">
+            <div class="bg-gray-800 text-white px-4 py-3 rounded-lg shadow-lg flex items-center space-x-3">
+                <div class="text-sm">{{ undoMessage }}</div>
+                <button @click="undoLastAction" class="bg-white text-gray-800 px-3 py-1 rounded text-sm">撤销</button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="main.js"></script>
+</body>
+</html>
