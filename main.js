@@ -1,4 +1,5 @@
 // Vue 3 应用主文件
+console.log('[main.js] loaded');
 const { createApp, ref, computed, onMounted, watch, nextTick } = Vue;
 
 // 应用配置
@@ -204,7 +205,49 @@ const app = createApp({
         });
 
         // 方法定义
-        const loadData = () => {
+        // 后端 API 基础路径（本地开发服务器）
+        const API_BASE = 'http://localhost:3000/api';
+
+        const apiGet = async (path) => {
+            const resp = await fetch(API_BASE + path);
+            if (!resp.ok) throw new Error(`GET ${path} ${resp.status}`);
+            return resp.json();
+        };
+        const apiPost = async (path, body) => {
+            const resp = await fetch(API_BASE + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            if (!resp.ok) throw new Error(`POST ${path} ${resp.status}`);
+            return resp.json();
+        };
+        const apiPut = async (path, body) => {
+            const resp = await fetch(API_BASE + path, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+            if (!resp.ok) throw new Error(`PUT ${path} ${resp.status}`);
+            return resp.json();
+        };
+        const apiDelete = async (path) => {
+            const resp = await fetch(API_BASE + path, { method: 'DELETE' });
+            if (!resp.ok) throw new Error(`DELETE ${path} ${resp.status}`);
+            return resp.json();
+        };
+
+        // loadData: 优先从后端获取（bookmarks & categories），后端不可用则回退到 localStorage
+        const loadData = async () => {
+            try {
+                // 尝试通过 CRUD 查询获取数据
+                const [cats, bms] = await Promise.all([
+                    apiGet('/categories'),
+                    apiGet('/bookmarks')
+                ]);
+                categories.value = cats || [];
+                bookmarks.value = bms || [];
+                // 确保存在默认分类并把未分类书签归入默认分类
+                ensureDefaultCategory();
+                bookmarks.value.forEach(b => { if (!b.category) b.category = DEFAULT_CATEGORY_ID; });
+                return;
+            } catch (err) {
+                console.warn('无法连接后端 API，回退到 localStorage：', err.message);
+            }
+
+            // 回退到 localStorage
             try {
                 const data = localStorage.getItem(APP_CONFIG.storageKey);
                 if (data) {
@@ -212,38 +255,44 @@ const app = createApp({
                     bookmarks.value = parsed.bookmarks || [];
                     categories.value = parsed.categories || [];
                 } else {
-                    // 初始化示例数据
                     initializeSampleData();
-}
+                }
             } catch (error) {
-                console.error('加载数据失败:', error);
+                console.error('加载 localStorage 数据失败:', error);
                 initializeSampleData();
             }
         };
 
-        const saveData = () => {
+        // saveData: 首选将整个快照发到后端 snapshot（方便最小改动迁移），若失败写回 localStorage
+        const saveData = async () => {
+            const data = {
+                bookmarks: bookmarks.value,
+                categories: categories.value,
+                version: APP_CONFIG.version,
+                lastUpdated: new Date().toISOString()
+            };
             try {
-                const data = {
-                    bookmarks: bookmarks.value,
-                    categories: categories.value,
-                    version: APP_CONFIG.version,
-                    lastUpdated: new Date().toISOString()
-                };
-                localStorage.setItem(APP_CONFIG.storageKey, JSON.stringify(data));
-            } catch (error) {
-                console.error('保存数据失败:', error);
+                await apiPost('/snapshot', data);
+            } catch (err) {
+                // 回退到 localStorage
+                try {
+                    localStorage.setItem(APP_CONFIG.storageKey, JSON.stringify(data));
+                } catch (e) {
+                    console.error('保存 localStorage 失败：', e);
+                }
             }
         };
 
         const initializeSampleData = () => {
             categories.value = [
-                { id: 'work', name: '工作', parentId: null, order: 0 },
-                { id: 'tools', name: '开发工具', parentId: 'work', order: 0 },
-                { id: 'docs', name: '技术文档', parentId: 'work', order: 1 },
-                { id: 'personal', name: '个人', parentId: null, order: 1 },
-                { id: 'entertainment', name: '娱乐', parentId: 'personal', order: 0 },
-                { id: 'learning', name: '学习', parentId: 'personal', order: 1 },
-                { id: 'shopping', name: '购物', parentId: null, order: 2 }
+                { id: 'uncategorized', name: '未分类', parentId: null, order: 0, expanded: true },
+                { id: 'work', name: '工作', parentId: null, order: 1, expanded: true },
+                { id: 'tools', name: '开发工具', parentId: 'work', order: 2, expanded: true },
+                { id: 'docs', name: '技术文档', parentId: 'work', order: 3, expanded: true },
+                { id: 'personal', name: '个人', parentId: null, order: 4, expanded: true },
+                { id: 'entertainment', name: '娱乐', parentId: 'personal', order: 5, expanded: true },
+                { id: 'learning', name: '学习', parentId: 'personal', order: 6, expanded: true },
+                { id: 'shopping', name: '购物', parentId: null, order: 7, expanded: true }
             ];
 
             bookmarks.value = [
@@ -321,7 +370,22 @@ const app = createApp({
                 }
             ];
 
+            // 将没有分类的书签设为默认分类
+            bookmarks.value.forEach(b => { if (!b.category) b.category = 'uncategorized'; });
+            ensureDefaultCategory();
             saveData();
+        };
+
+        const DEFAULT_CATEGORY_ID = 'uncategorized';
+
+        const ensureDefaultCategory = () => {
+            const exist = categories.value.find(c => c.id === DEFAULT_CATEGORY_ID);
+            if (!exist) {
+                const def = { id: DEFAULT_CATEGORY_ID, name: '未分类', parentId: null, order: categories.value.length, expanded: true };
+                categories.value.unshift(def);
+                // 尝试持久化到后端（异步，不阻塞）
+                apiPost('/categories', def).catch(() => {});
+            }
         };
 
         const generateId = () => {
@@ -407,25 +471,43 @@ const app = createApp({
             bulkMoveTarget.value = '';
         };
 
-        const deleteSelected = () => {
+        const deleteSelected = async () => {
             if (selectedIds.value.length === 0) return;
             if (!confirm(`确定要删除所选的 ${selectedIds.value.length} 个书签吗？此操作不可恢复！`)) return;
-            bookmarks.value = bookmarks.value.filter(b => !selectedIds.value.includes(b.id));
-            saveData();
+            const ids = [...selectedIds.value];
+            // 乐观更新
+            bookmarks.value = bookmarks.value.filter(b => !ids.includes(b.id));
             clearSelection();
+            try {
+                await Promise.all(ids.map(id => apiDelete(`/bookmarks/${encodeURIComponent(id)}`)));
+            } catch (err) {
+                console.error('批量删除失败，稍后同步：', err);
+                saveData();
+            }
         };
 
-        const moveSelectedToCategory = (categoryId) => {
+        const moveSelectedToCategory = async (categoryId) => {
             if (!categoryId) return;
             if (selectedIds.value.length === 0) return;
-            bookmarks.value.forEach(b => {
-                if (selectedIds.value.includes(b.id)) b.category = categoryId;
-            });
-            saveData();
+            const ids = [...selectedIds.value];
+            const prev = bookmarks.value.filter(b => ids.includes(b.id)).map(b => ({ id: b.id, from: b.category }));
+            // 乐观更新
+            bookmarks.value.forEach(b => { if (ids.includes(b.id)) { b.category = categoryId; b.updatedAt = new Date().toISOString(); } });
             clearSelection();
+            try {
+                await Promise.all(ids.map(id => {
+                    const b = bookmarks.value.find(x => x.id === id);
+                    return apiPut(`/bookmarks/${encodeURIComponent(id)}`, b);
+                }));
+            } catch (err) {
+                console.error('移动失败，尝试回退或保存快照：', err);
+                // 回退到之前状态 by snapshot save
+                saveData();
+                undoStack.value.push({ type: 'move', items: prev });
+            }
         };
 
-        const addCategory = () => {
+        const addCategory = async () => {
             const name = prompt('请输入分类名称：');
             if (name && name.trim()) {
                 const newCategory = {
@@ -436,7 +518,84 @@ const app = createApp({
                     expanded: true
                 };
                 categories.value.push(newCategory);
+                try {
+                    await apiPost('/categories', newCategory);
+                } catch (err) {
+                    console.error('创建分类失败，保存快照回退：', err);
+                    saveData();
+                }
+            }
+        };
+
+        // 重命名分类：乐观更新，失败回退并保存快照
+        const renameCategory = async (categoryId) => {
+            const cat = categories.value.find(c => c.id === categoryId);
+            if (!cat) return;
+            const newName = prompt('输入新的分类名称：', cat.name);
+            if (!newName || !newName.trim()) return;
+            const oldName = cat.name;
+            cat.name = newName.trim();
+            try {
+                await apiPut(`/categories/${encodeURIComponent(categoryId)}`, cat);
+            } catch (err) {
+                console.error('重命名分类失败，已回退并保存快照：', err);
+                cat.name = oldName;
                 saveData();
+                alert('重命名失败，已回退并保存本地快照');
+            }
+        };
+
+        // 安全调用重命名：避免模板直接调用时因绑定未初始化导致错误
+        const safeRename = (categoryId) => {
+            if (typeof renameCategory === 'function') {
+                try {
+                    renameCategory(categoryId);
+                } catch (e) {
+                    console.error('renameCategory 调用异常：', e);
+                    alert('重命名失败，请查看控制台以获取详细信息。');
+                }
+            } else {
+                console.warn('renameCategory 未定义，操作被忽略');
+                alert('重命名功能当前不可用，请刷新页面或稍后重试。');
+            }
+        };
+
+        // 修复分类 parentId：尝试将指向不存在 id 的 parentId 使用 name 映射或提升为根
+        const fixCategoryParents = () => {
+            const cats = categories.value;
+            if (!Array.isArray(cats) || cats.length === 0) {
+                alert('当前没有分类可修复。');
+                return;
+            }
+            const idSet = new Set(cats.map(c => c.id));
+            const nameToId = {};
+            cats.forEach(c => { nameToId[c.name] = c.id; });
+            let changed = 0;
+            cats.forEach(c => {
+                if (c.parentId && !idSet.has(c.parentId)) {
+                    // 如果 parentId 看起来像名字，则尝试按 name 映射
+                    if (nameToId[c.parentId]) {
+                        c.parentId = nameToId[c.parentId];
+                        changed++;
+                    } else {
+                        // 查找可能的父项（有时 parentId 存的是旧的导入 id 或 name）
+                        const maybe = cats.find(x => x.id === c.parentId || x.name === c.parentId);
+                        if (maybe) {
+                            c.parentId = maybe.id;
+                            changed++;
+                        } else {
+                            // 无法修复则设为 null（提升为根），但保留原值可选
+                            c.parentId = null;
+                            changed++;
+                        }
+                    }
+                }
+            });
+            if (changed > 0) {
+                saveData();
+                alert('分类关系修复完成，修改数量：' + changed + '，已保存。');
+            } else {
+                alert('未发现需要修复的分类。');
             }
         };
 
@@ -449,7 +608,11 @@ const app = createApp({
             if (bookmark) {
                 bookmark.visitCount = (bookmark.visitCount || 0) + 1;
                 bookmark.lastVisited = new Date().toISOString();
-                saveData();
+                // 异步上报访问次数
+                apiPut(`/bookmarks/${encodeURIComponent(bookmark.id)}`, bookmark).catch(err => {
+                    console.warn('更新访问次数失败，保存快照：', err);
+                    saveData();
+                });
             }
             window.open(url, '_blank');
         };
@@ -465,21 +628,27 @@ const app = createApp({
             };
         };
 
-        const deleteBookmark = (bookmark) => {
+        const deleteBookmark = async (bookmark) => {
             if (confirm(`确定要删除书签 "${bookmark.title}" 吗？`)) {
+                // 乐观更新
                 bookmarks.value = bookmarks.value.filter(b => b.id !== bookmark.id);
-                saveData();
+                try {
+                    await apiDelete(`/bookmarks/${encodeURIComponent(bookmark.id)}`);
+                } catch (err) {
+                    console.error('删除书签失败，保存快照回退：', err);
+                    saveData();
+                }
             }
         };
 
-        const saveBookmark = () => {
+        const saveBookmark = async () => {
             const formData = {
                 ...bookmarkForm.value,
                 tags: bookmarkForm.value.tags.split(',').map(tag => tag.trim()).filter(tag => tag)
             };
 
             if (editingBookmark.value) {
-                // 编辑现有书签
+                // 编辑现有书签 - 乐观更新并调用 PUT
                 const index = bookmarks.value.findIndex(b => b.id === editingBookmark.value.id);
                 if (index !== -1) {
                     bookmarks.value[index] = {
@@ -487,6 +656,12 @@ const app = createApp({
                         ...formData,
                         updatedAt: new Date().toISOString()
                     };
+                    try {
+                        await apiPut(`/bookmarks/${encodeURIComponent(editingBookmark.value.id)}`, bookmarks.value[index]);
+                    } catch (err) {
+                        console.error('更新书签失败，保存快照回退：', err);
+                        saveData();
+                    }
                 }
             } else {
                 // 添加新书签
@@ -499,9 +674,14 @@ const app = createApp({
                     visitCount: 0
                 };
                 bookmarks.value.unshift(newBookmark);
+                try {
+                    await apiPost('/bookmarks', newBookmark);
+                } catch (err) {
+                    console.error('添加书签到后端失败，保存快照：', err);
+                    saveData();
+                }
             }
 
-            saveData();
             cancelEdit();
         };
 
@@ -583,7 +763,7 @@ const app = createApp({
                     categories.value.forEach(c => {
                         if (c.parentId === pid) ids.push(c.id);
                     });
-                }
+}
                 return ids;
             };
 
@@ -700,6 +880,81 @@ const app = createApp({
             hoveredDropMode.value = mode;
         };
 
+        // 决策型的 drop 处理：如果是 category: 则触发重排，否则当作书签放置
+        const handleCategoryDropOrReorder = (categoryId, event) => {
+            event.preventDefault();
+            try {
+                const data = event.dataTransfer.getData('text/plain');
+                if (data && data.startsWith('category:')) {
+                    handleCategoryReorderDrop(categoryId, event);
+                    return;
+                }
+            } catch (e) {
+                // ignore
+            }
+            // 否则当作书签或外部链接放置
+            handleCategoryDrop(categoryId, event);
+        };
+
+        // 撤销提示显示与定时器
+        const scheduleUndoToast = (message, autoHide = true) => {
+            undoMessage.value = message || '可撤销操作';
+            undoToast.value = true;
+            if (undoTimer) clearTimeout(undoTimer);
+            if (autoHide) {
+                undoTimer = setTimeout(() => {
+                    undoToast.value = false;
+                    undoTimer = null;
+                }, 8000);
+            }
+        };
+
+        // 执行撤销操作（弹出 undoStack 中最新的一项并回退）
+        async function undoLastAction() {
+            if (!undoStack.value || undoStack.value.length === 0) return;
+            const last = undoStack.value.pop();
+            try {
+                if (last.type === 'delete-category' && last.prev) {
+                    // 还原完整的 prev 状态
+                    categories.value = last.prev.categories || categories.value;
+                    bookmarks.value = last.prev.bookmarks || bookmarks.value;
+                    await saveData();
+                } else if (last.type === 'reorder' && Array.isArray(last.prev)) {
+                    // last.prev 是一个数组，包含 {id, parentId, order}
+                    const map = {};
+                    last.prev.forEach(p => { map[p.id] = p; });
+                    categories.value.forEach(c => {
+                        if (map[c.id]) {
+                            c.parentId = map[c.id].parentId;
+                            c.order = map[c.id].order;
+                        }
+                    });
+                    // 以 order 排序
+                    categories.value.sort((a,b)=> (a.order||0) - (b.order||0));
+                    await saveData();
+                } else if (last.type === 'add' && Array.isArray(last.items)) {
+                    // 删除之前新增的项（通常是书签 id 列表）
+                    const ids = new Set(last.items);
+                    bookmarks.value = bookmarks.value.filter(b => !ids.has(b.id));
+                    await saveData();
+                } else if (last.type === 'move' && Array.isArray(last.items)) {
+                    // items: [{id, from}]
+                    last.items.forEach(it => {
+                        const b = bookmarks.value.find(x => x.id === it.id);
+                        if (b) b.category = it.from || '';
+                    });
+                    await saveData();
+                }
+                scheduleUndoToast('撤销成功', true);
+            } catch (err) {
+                console.error('撤销失败：', err);
+                alert('撤销失败，请查看控制台');
+            } finally {
+                undoToast.value = false;
+                if (undoTimer) { clearTimeout(undoTimer); undoTimer = null; }
+            }
+        }
+
         // 处理书签拖拽到分类树节点（放在 setup 内以访问响应式引用）
         const handleCategoryDrop = (categoryId, event) => {
             event.preventDefault();
@@ -722,8 +977,15 @@ const app = createApp({
                         updatedAt: new Date().toISOString(),
                         visitCount: 0
                     };
+                    // 乐观更新 UI
                     bookmarks.value.unshift(newBookmark);
-                    saveData();
+                    // 持久化到后端
+                    apiPost('/bookmarks', newBookmark).then(()=>{
+                        // 已保存
+                    }).catch(err=>{
+                        console.warn('保存外部拖入书签到后端失败，保存快照：', err);
+                        saveData();
+                    });
                     // 记录撤销信息
                     undoStack.value.push({ type: 'add', items: [newBookmark.id] });
                     scheduleUndoToast('已添加外部链接，撤销', true);
@@ -748,15 +1010,21 @@ const app = createApp({
                     prev.push({ id: b.id, from: b.category });
                 }
             });
-
-            // 执行移动
+            // 执行移动（乐观更新并逐个 PUT）
             bookmarks.value.forEach(b => {
                 if (idsToMove.includes(b.id)) {
                     b.category = categoryId;
                     b.updatedAt = new Date().toISOString();
                 }
             });
-            saveData();
+            // 异步同步到后端
+            Promise.all(idsToMove.map(id => {
+                const b = bookmarks.value.find(x => x.id === id);
+                return apiPut(`/bookmarks/${encodeURIComponent(id)}`, b).catch(e => { throw e; });
+            })).catch(err => {
+                console.error('移动书签到分类失败，保存快照回退：', err);
+                saveData();
+            });
             draggedBookmark.value = null;
             // 推入撤销栈
             undoStack.value.push({ type: 'move', items: prev });
@@ -770,7 +1038,7 @@ const app = createApp({
             if (!file) return;
             event.target.value = '';
             const reader = new FileReader();
-            reader.onload = (e) => {
+            reader.onload = async (e) => {
                 try {
                     const content = e.target.result;
                     let importedBookmarks = [];
@@ -782,63 +1050,204 @@ const app = createApp({
                     } else if (file.name.endsWith('.html')) {
                         const parser = new DOMParser();
                         const doc = parser.parseFromString(content, 'text/html');
-                        const links = doc.querySelectorAll('a');
-                        const folders = doc.querySelectorAll('h3');
-                        importedBookmarks = Array.from(links).map(link => {
-                            let categoryName = '';
-                            let parentElement = link.parentElement;
-                            while (parentElement && parentElement !== doc.body) {
-                                const h3 = parentElement.querySelector('h3');
-                                if (h3) {
-                                    categoryName = h3.textContent.trim();
-                                    break;
+
+                        // 尝试基于 NETSCAPE 书签的 DL/DT/H3 结构递归解析文件，保留分类层级关系
+                        const topDL = doc.querySelector('dl');
+                        const cats = [];
+                        const bms = [];
+
+                        // 兼容所有主流浏览器导出的书签格式，递归采集所有 <A> 书签和 <H3> 分类
+                        const resolveDLName = (startEl) => {
+                            try {
+                                if (!startEl) return '';
+                                // 从当前元素开始，向上和向前查找最近的 <H3>
+                                let el = startEl;
+                                for (let depth = 0; depth < 8 && el; depth++) {
+                                    // 在当前层级，向前搜索前面的兄弟节点
+                                    let sib = el.previousElementSibling;
+                                    while (sib) {
+                                        if (sib.tagName && sib.tagName.toLowerCase() === 'dt') {
+                                            // <DT> 内可能包含 <H3>
+                                            const h3 = sib.querySelector('h3');
+                                            if (h3 && h3.textContent && h3.textContent.trim()) return h3.textContent.trim();
+                                        }
+                                        // 有些导出把 H3 放在更前的位置，直接检查 sib 是否为 H3
+                                        if (sib.tagName && sib.tagName.toLowerCase() === 'h3') {
+                                            if (sib.textContent && sib.textContent.trim()) return sib.textContent.trim();
+                                        }
+                                        sib = sib.previousElementSibling;
+                                    }
+                                    // 没找到，向上到父元素继续查找（例如 DL 的父节点可能是 DT）
+                                    el = el.parentElement;
                                 }
-                                parentElement = parentElement.parentElement;
+                                // 作为兜底，直接在文档中寻找距离此节点最近的 H3（遍历所有 H3，取位置最靠前但在 startEl 之前的）
+                                try {
+                                    const allH3 = doc.querySelectorAll('h3');
+                                    let candidate = '';
+                                    let lastIndex = -1;
+                                    for (let i = 0; i < allH3.length; i++) {
+                                        const h = allH3[i];
+                                        if (h.compareDocumentPosition && startEl.compareDocumentPosition) {
+                                            // 如果 h 在 startEl 之前
+                                            const pos = h.compareDocumentPosition(startEl);
+                                            // DOCUMENT_POSITION_FOLLOWING === 4 means h is before startEl
+                                            if (pos & Node.DOCUMENT_POSITION_FOLLOWING) {
+                                                candidate = h.textContent.trim();
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    return candidate || '';
+                                } catch (e) {
+                                    return '';
+                                }
+                            } catch (e) {
+                                return '';
                             }
-                            return {
-                                id: generateId(),
-                                title: link.textContent.trim(),
-                                url: link.href,
-                                description: link.getAttribute('description') || '',
-                                favicon: link.getAttribute('icon') || '',
-                                category: categoryName,
-                                tags: [],
-                                createdAt: new Date().toISOString(),
-                                updatedAt: new Date().toISOString(),
-                                visitCount: 0
-                            };
-                        });
-                        importedCategories = Array.from(folders).map(folder => ({
-                            id: generateId(),
-                            name: folder.textContent.trim(),
-                            parentId: null,
-                            order: importedCategories.length,
-                            expanded: true
-                        }));
+                        };
+
+                        const processDL = (dlElement, parentId = '', parentName = '') => {
+                            if (!dlElement) return;
+                            let node = dlElement.firstElementChild;
+                            while (node) {
+                                if (node.tagName && node.tagName.toLowerCase() === 'dt') {
+                                    // 先查找 <H3> 分类
+                                    let h3 = null, a = null;
+                                    for (let child = node.firstElementChild; child; child = child.nextElementSibling) {
+                                        if (child.tagName) {
+                                            const tag = child.tagName.toLowerCase();
+                                            if (tag === 'h3') h3 = child;
+                                            else if (tag === 'a') a = child;
+                                        }
+                                    }
+                                    // 兼容 <DT><A ...></A></DT> 结构
+                                    if (!h3 && !a && node.tagName.toLowerCase() === 'dt' && node.firstElementChild && node.firstElementChild.tagName && node.firstElementChild.tagName.toLowerCase() === 'a') {
+                                        a = node.firstElementChild;
+                                    }
+                                    if (h3) {
+                                        const catId = generateId();
+                                        const name = h3.textContent.trim();
+                                        const cat = { id: catId, name, parentId: parentId || null, order: cats.length, expanded: true };
+                                        cats.push(cat);
+                                        // 查找下一个兄弟节点 <DL> 作为子分类/子书签
+                                        let next = node.nextElementSibling;
+                                        if (next && next.tagName && next.tagName.toLowerCase() === 'dl') {
+                                            processDL(next, catId, name);
+                                        }
+                                    }
+                                    if (a) {
+                                        // 普通书签项
+                                        const title = a.textContent.trim();
+                                        const url = a.href;
+                                        const addDateAttr = a.getAttribute('add_date') || a.getAttribute('ADD_DATE') || a.getAttribute('add_date');
+                                        const createdAt = addDateAttr ? new Date(parseInt(addDateAttr, 10) * 1000).toISOString() : new Date().toISOString();
+                                        // 尝试记录 categoryName（如果 parentName 可用则用它，否则尝试根据 dlElement 推断）
+                                        const inferredName = parentName || resolveDLName(dlElement) || '';
+                                        bms.push({ id: generateId(), title, url, description: '', favicon: a.getAttribute('icon') || '', category: parentId || '', categoryName: inferredName, tags: [], createdAt, updatedAt: createdAt, visitCount: 0 });
+                                    }
+                                    // 递归处理 <DT> 内部的 <DL>（有些结构是 <DT>...<DL>...</DL>）
+                                    const innerDL = node.querySelector(':scope > dl');
+                                    if (innerDL) processDL(innerDL, parentId, parentName);
+                                }
+                                node = node.nextElementSibling;
+                            }
+                        };
+
+                        if (topDL) {
+                            processDL(topDL, '');
+                        } else {
+                            // 兜底：找所有链接，归到根
+                            const links = doc.querySelectorAll('a');
+                            links.forEach(link => {
+                                bms.push({ id: generateId(), title: link.textContent.trim(), url: link.href, description: '', favicon: link.getAttribute('icon') || '', category: '', tags: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), visitCount: 0 });
+                            });
+                        }
+
+                        importedCategories = cats;
+                        importedBookmarks = bms;
+                        // 调试输出，方便定位采集问题
+                        console.log('[HTML导入调试] 采集到分类数:', cats.length, cats.slice(0,5));
+                        console.log('[HTML导入调试] 采集到书签数:', bms.length, bms.slice(0,5));
+                        // 输出样例的 categoryName 字段，帮助判断解析是否成功
+                        console.log('[HTML导入调试] 书签样例 categoryName 字段:', bms.slice(0,10).map(x=>({title:x.title, category:x.category, categoryName:x.categoryName})).slice(0,10));
                     }
                     if (importedBookmarks.length > 0) {
+                        // 调试：查看导入书签中 category 字段的分布，帮助定位映射问题
+                        const emptyCat = importedBookmarks.filter(b => !b.category).length;
+                        const nonEmptyCat = importedBookmarks.length - emptyCat;
+                        const sampleCats = Array.from(new Set(importedBookmarks.map(b => b.category).filter(Boolean))).slice(0,10);
+                        console.log('[HTML导入调试] 导入书签 category 分布: total=', importedBookmarks.length, 'empty=', emptyCat, 'nonEmpty=', nonEmptyCat, 'sampleNonEmpty=', sampleCats);
+                        // 确保默认分类存在，避免映射到空
+                        ensureDefaultCategory();
                         // 合并分类（只添加新分类）
-                        const existingCategoryNames = categories.value.map(cat => cat.name);
-                        const newCategories = importedCategories.filter(cat =>
-                            !existingCategoryNames.includes(cat.name)
-                        );
+                        // Build existing category lookup (normalized by name) and id set
+                        const existingIdSet = new Set();
+                        const existingNameToId = {};
+                        categories.value.forEach(cat => { existingIdSet.add(cat.id); existingNameToId[(cat.name||'').trim().toLowerCase()] = cat.id; });
+
+                        // Decide which imported categories are new (by id or normalized name)
+                        const newCategories = [];
+                        importedCategories.forEach(ic => {
+                            const normName = (ic.name||'').trim().toLowerCase();
+                            if (existingIdSet.has(ic.id)) return; // already present by id
+                            if (existingNameToId[normName]) return; // name already exists
+                            // ensure imported category uses trimmed name
+                            ic.name = (ic.name || '').trim();
+                            newCategories.push(ic);
+                        });
+
+                        // push new categories (keep their ids)
                         if (newCategories.length > 0) {
                             categories.value.push(...newCategories);
                         }
-                        // 分类名->id 映射
-                        const categoryNameToId = {};
+
+                        // Rebuild name->id map after adding new categories (normalized)
+                        const nameToId = {};
+                        categories.value.forEach(cat => { nameToId[(cat.name||'').trim().toLowerCase()] = cat.id; });
+
+                        // Build mapping from imported category id -> final id (after merge)
+                        const importedIdToFinalId = {};
+                        importedCategories.forEach(ic => {
+                            const normName = (ic.name||'').trim().toLowerCase();
+                            if (existingIdSet.has(ic.id)) importedIdToFinalId[ic.id] = ic.id;
+                            else if (nameToId[normName]) importedIdToFinalId[ic.id] = nameToId[normName];
+                            else importedIdToFinalId[ic.id] = ic.id; // fallback to imported id (we pushed it)
+                        });
+
+                        // Remap parentId for categories in categories.value if they reference an imported id
                         categories.value.forEach(cat => {
-                            categoryNameToId[cat.name] = cat.id;
+                            if (cat.parentId && importedIdToFinalId[cat.parentId]) {
+                                const finalPid = importedIdToFinalId[cat.parentId];
+                                if (cat.parentId !== finalPid) cat.parentId = finalPid;
+                            }
                         });
                         // 网址去重合并
                         let mergedCount = 0;
+                        let mappedToDefault = 0;
+                        let mappedToExisting = 0;
+                        let mappedByName = 0;
                         importedBookmarks.forEach(imported => {
-                            // 分类归类
-                            if (imported.category && categoryNameToId[imported.category]) {
-                                imported.category = categoryNameToId[imported.category];
-                            } else {
-                                imported.category = '';
+                            // 分类归类：支持两种情况
+                            // 1) imported.category is an imported category id -> map via importedIdToFinalId
+                            // 2) imported.category is a category name -> map via nameToId
+                            // Normalize category mapping: prefer imported.category (id), then imported.categoryName (name), then fallback to DEFAULT
+                            let finalCat = '';
+                            if (imported.category) {
+                                const catKey = (imported.category || '').toString().trim();
+                                if (importedIdToFinalId[catKey]) finalCat = importedIdToFinalId[catKey];
+                                else if (nameToId[catKey.toLowerCase()]) finalCat = nameToId[catKey.toLowerCase()];
                             }
+                            if (!finalCat && imported.categoryName) {
+                                const norm = (imported.categoryName || '').trim().toLowerCase();
+                                if (nameToId[norm]) finalCat = nameToId[norm];
+                            }
+                            if (!finalCat) finalCat = DEFAULT_CATEGORY_ID;
+                            imported.category = finalCat;
+
+                            // 统计映射情况
+                            if (imported.category === DEFAULT_CATEGORY_ID) mappedToDefault++; else mappedToExisting++;
+                            if (imported.categoryName && imported.category && imported.category !== DEFAULT_CATEGORY_ID) mappedByName++;
+
                             // 查找是否已存在同网址
                             const exist = bookmarks.value.find(b => b.url === imported.url);
                             if (exist) {
@@ -853,11 +1262,24 @@ const app = createApp({
                                 bookmarks.value.unshift(imported);
                             }
                         });
-                        saveData();
-                        let msg = `成功导入 ${importedBookmarks.length} 个书签！`;
-                        if (newCategories.length > 0) msg += ` 新增分类 ${newCategories.length} 个。`;
-                        if (mergedCount > 0) msg += ` 有 ${mergedCount} 个网址已存在，已自动合并。`;
-                        alert(msg);
+                        console.log('[HTML导入调试] 映射结果：mappedToExisting=', mappedToExisting, 'mappedToDefault=', mappedToDefault, 'mappedByName=', mappedByName, 'mergedCount=', mergedCount);
+                        // 将导入数据发送到后端以持久化（合并导入）
+                        try {
+                            await apiPost('/import', {
+                                categories: importedCategories.map(c=>({ ...c })),
+                                bookmarks: importedBookmarks.map(b=>({ ...b }))
+                            });
+                            // 重新从后端加载最新数据
+                            await loadData();
+                            let msg = `成功导入 ${importedBookmarks.length - mergedCount} 个书签！`;
+                            if (newCategories.length > 0) msg += ` 新增分类 ${newCategories.length} 个。`;
+                            if (mergedCount > 0) msg += ` 有 ${mergedCount} 个网址已存在，已自动合并。`;
+                            alert(msg);
+                        } catch (err) {
+                            console.error('导入到后端失败，已回退到 localStorage：', err);
+                            saveData();
+                            alert('导入失败：无法将数据保存至后端，已保存到 localStorage');
+                        }
                     } else {
                         alert('未找到可导入的书签数据。');
                     }
@@ -872,6 +1294,23 @@ const app = createApp({
             reader.readAsText(file);
         };
 
+        // 从当前浏览器 localStorage 一键导入到后端数据库（迁移按钮使用）
+        const importLocalStorage = async () => {
+            const raw = localStorage.getItem(APP_CONFIG.storageKey);
+            if (!raw) { alert('未检测到本地 localStorage 数据'); return; }
+            try {
+                const data = JSON.parse(raw);
+                const categoriesToSend = data.categories || [];
+                const bookmarksToSend = data.bookmarks || [];
+                await apiPost('/import', { categories: categoriesToSend, bookmarks: bookmarksToSend });
+                await loadData();
+                alert('已将 localStorage 数据导入后端数据库');
+            } catch (err) {
+                console.error('localStorage 导入失败：', err);
+                alert('导入失败，请查看控制台');
+            }
+        };
+
         const exportBookmarks = (format) => {
             let content = '';
             let filename = `bookmarks_${new Date().toISOString().split('T')[0]}`;
@@ -884,16 +1323,48 @@ const app = createApp({
                 }, null, 2);
                 filename += '.json';
             } else if (format === 'html') {
-                // 生成Chrome兼容的书签HTML格式
-                content = `<!DOCTYPE NETSCAPE-Bookmark-file-1>
-<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">
-<TITLE>Bookmarks</TITLE>
-<H1>Bookmarks</H1>
-<DL><p>
-${bookmarks.value.map(bookmark => 
-    `    <DT><A HREF="${bookmark.url}" ADD_DATE="${Math.floor(new Date(bookmark.createdAt).getTime() / 1000)}">${bookmark.title}</A>`
-).join('\n')}
-</DL><p>`;
+                // 生成 Chrome/Chrome-compatible 的书签 HTML（保留分类树与子分类）
+                const escapeHtml = (str) => String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+                const header = `<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">\n<TITLE>Bookmarks</TITLE>\n<H1>Bookmarks</H1>`;
+
+                const buildCategoryHtml = (cats) => {
+                    return cats.map(cat => {
+                        const lines = [];
+                        lines.push(`    <DT><H3>${escapeHtml(cat.name)}</H3>`);
+                        lines.push('    <DL><p>');
+
+                        // 当前分类下的书签（不包含子分类内的书签）
+                        const bms = bookmarks.value.filter(b => b.category === cat.id);
+                        bms.forEach(b => {
+                            const addDate = Math.floor(new Date(b.createdAt).getTime() / 1000) || Math.floor(Date.now() / 1000);
+                            lines.push(`        <DT><A HREF="${escapeHtml(b.url)}" ADD_DATE="${addDate}">${escapeHtml(b.title)}</A>`);
+                        });
+
+                        // 递归子分类
+                        if (cat.children && cat.children.length) {
+                            lines.push(buildCategoryHtml(cat.children));
+                        }
+
+                        lines.push('    </DL><p>');
+                        return lines.join('\n');
+                    }).join('\n');
+                };
+
+                // 根级别输出：先输出没有分类的书签
+                const rootLines = [];
+                rootLines.push('<DL><p>');
+                const rootBookmarks = bookmarks.value.filter(b => !b.category);
+                rootBookmarks.forEach(b => {
+                    const addDate = Math.floor(new Date(b.createdAt).getTime() / 1000) || Math.floor(Date.now() / 1000);
+                    rootLines.push(`    <DT><A HREF="${escapeHtml(b.url)}" ADD_DATE="${addDate}">${escapeHtml(b.title)}</A>`);
+                });
+
+                if (categoryTree.value && categoryTree.value.length) {
+                    rootLines.push(buildCategoryHtml(categoryTree.value));
+                }
+                rootLines.push('</DL><p>');
+
+                content = `${header}\n${rootLines.join('\n')}`;
                 filename += '.html';
             }
 
@@ -904,73 +1375,7 @@ ${bookmarks.value.map(bookmark =>
             a.download = filename;
             a.click();
             URL.revokeObjectURL(url);
-        };
-
-        // 安排显示撤销吐司，并在超时后自动隐藏
-        const scheduleUndoToast = (message, autoHide = true) => {
-            undoMessage.value = message;
-            undoToast.value = true;
-            if (undoTimer) clearTimeout(undoTimer);
-            if (autoHide) {
-                undoTimer = setTimeout(() => {
-                    undoToast.value = false;
-                    // 弹窗消失时保留撤销记录一段时间或直接清理。这里选择清理以避免无限增长。
-                    undoStack.value = [];
-                }, 6000);
-            }
-        };
-
-        const undoLastAction = () => {
-            const action = undoStack.value.pop();
-            if (!action) return;
-            if (action.type === 'move') {
-                action.items.forEach(item => {
-                    const b = bookmarks.value.find(bb => bb.id === item.id);
-                    if (b) b.category = item.from;
-                });
-            } else if (action.type === 'add') {
-                // 删除已添加的书签
-                action.items.forEach(id => {
-                    const idx = bookmarks.value.findIndex(b => b.id === id);
-                    if (idx !== -1) bookmarks.value.splice(idx, 1);
-                });
-            } else if (action.type === 'reorder') {
-                // 恢复分类顺序
-                const prev = action.prev || [];
-                prev.forEach(p => {
-                    const c = categories.value.find(cat => cat.id === p.id);
-                    if (c) {
-                        c.parentId = p.parentId;
-                        c.order = p.order;
-                    }
-                });
-                // 依据 order 排序
-                categories.value.sort((a, b) => (a.order || 0) - (b.order || 0));
-            } else if (action.type === 'delete-category') {
-                // 恢复被删除前的整个 categories 和 bookmarks 状态
-                const prev = action.prev || null;
-                if (prev) {
-                    categories.value = prev.categories;
-                    bookmarks.value = prev.bookmarks;
-                }
-            }
-            saveData();
-            undoToast.value = false;
-            if (undoTimer) clearTimeout(undoTimer);
-        };
-
-        // wrapper：在分类节点上放置时，先尝试分类重排（如果是分类拖拽），否则处理书签/外部链接放置
-        const handleCategoryDropOrReorder = (categoryId, event) => {
-            // 检查 dataTransfer 是否为分类重排
-            try {
-                const data = event.dataTransfer.getData('text/plain');
-                if (data && data.startsWith('category:')) {
-                    handleCategoryReorderDrop(categoryId, event);
-                    return;
-                }
-            } catch (e) {}
-            // 否则当作书签或外部链接放置
-            handleCategoryDrop(categoryId, event);
+            return;
         };
 
         const backupData = () => {
@@ -1090,6 +1495,7 @@ ${bookmarks.value.map(bookmark =>
         });
 
         // 返回模板中需要使用的数据和方法
+            console.log('[main.js] before return typeof undoLastAction =', typeof undoLastAction);
             return {
             // 数据
             bookmarks,
@@ -1124,6 +1530,9 @@ ${bookmarks.value.map(bookmark =>
             selectCategory,
             toggleCategory,
             addCategory,
+            renameCategory,
+            safeRename,
+            fixCategoryParents,
             confirmDeleteCategory,
             filterByTag,
             openBookmark,
@@ -1134,6 +1543,7 @@ ${bookmarks.value.map(bookmark =>
             handleDragStart,
             handleDrop,
             importBookmarks,
+            importLocalStorage,
             handleCategoryDrop,
             handleDragEnd,
             // 分类拖拽/重排相关

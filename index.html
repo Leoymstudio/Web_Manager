@@ -96,6 +96,8 @@
                                     @dragstart="handleCategoryDragStart($event, category)"
                                     @dragend="handleCategoryDragEnd($event)"
                                     @contextmenu.prevent="confirmDeleteCategory(category)"
+                                    @mouseenter="hoveredCategoryId = category.id"
+                                    @mouseleave="hoveredCategoryId = null"
                                 >
                                     <button 
                                         v-if="category.children && category.children.length"
@@ -115,6 +117,12 @@
                                     <span v-if="hoveredCategoryId === category.id" class="ml-2 text-xs text-gray-600">
                                         {{ hoveredDropMode === 'child' ? '放在此为子分类' : (hoveredDropMode === 'before' ? '插入为同级前' : '插入为同级后') }}
                                     </span>
+                                    <!-- 重命名按钮（仅在悬停时显示） -->
+                                    <button v-if="hoveredCategoryId === category.id" @click.stop="safeRename(category.id)" class="ml-2 text-gray-500 hover:text-gray-800" title="重命名">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M9 11l6-6 3 3L12 14H9v-3z"></path>
+                                        </svg>
+                                    </button>
                                 </div>
                                 
                                 <transition name="fade">
@@ -133,15 +141,22 @@
                                             @dragstart="handleCategoryDragStart($event, child)"
                                             @dragend="handleCategoryDragEnd($event)"
                                             @contextmenu.prevent="confirmDeleteCategory(child)"
+                                            @mouseenter="hoveredCategoryId = child.id"
+                                            @mouseleave="hoveredCategoryId = null"
                                         >
                                             <svg class="w-4 h-4 mr-2 category-icon level-1" fill="currentColor" viewBox="0 0 20 20">
                                                 <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"></path>
                                             </svg>
                                             <span class="flex-1 text-sm">{{ child.name }}</span>
                                             <span class="text-xs text-gray-500">{{ child.count }}</span>
-                                            <span v-if="hoveredCategoryId === child.id" class="ml-2 text-xs text-gray-600">
+                                                <span v-if="hoveredCategoryId === child.id" class="ml-2 text-xs text-gray-600">
                                                 {{ hoveredDropMode === 'child' ? '放在此为子分类' : (hoveredDropMode === 'before' ? '插入为同级前' : '插入为同级后') }}
                                             </span>
+                                                <button v-if="hoveredCategoryId === child.id" @click.stop="safeRename(child.id)" class="ml-2 text-gray-500 hover:text-gray-800" title="重命名">
+                                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M9 11l6-6 3 3L12 14H9v-3z"></path>
+                                                    </svg>
+                                                </button>
                                         </div>
                                     </div>
                                 </transition>
@@ -510,6 +525,18 @@
                                         class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 text-sm"
                                     >
                                         清空数据
+                                    </button>
+                                    <button
+                                        @click="fixCategoryParents"
+                                        class="px-4 py-2 bg-yellow-500 text-white rounded-md hover:bg-yellow-600 text-sm"
+                                    >
+                                        修复分类关系
+                                    </button>
+                                    <button
+                                        @click="importLocalStorage"
+                                        class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 text-sm"
+                                    >
+                                        从 localStorage 导入到数据库
                                     </button>
                                 </div>
                             </div>
