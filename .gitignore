@@ -2,7 +2,8 @@
 *.log
 package-lock.json
 package.json
-
+chorme_bookmarks.html
+lenovo_bookmarks.html
 # 忽略 node_modules 文件夹
 node_modules/
  
